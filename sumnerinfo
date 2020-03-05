@@ -1,0 +1,83 @@
+#!/bin/bash
+
+## a few commands to display current state of HPC running moab job scheduler
+## @sbamin
+
+#### required functions ####
+## calculate difference between two timestamps
+## https://askubuntu.com/a/1158876/52398
+diff_dates(){
+    TS1=$(date -d "$1" +%s)
+    TS2=$(date -d "$2" +%s)
+    [ "$TS2" -ge "$TS1" ] \
+        && TZ=UTC date -d @$((TS2-TS1)) '+%dDays plus %H:%M:%S' \
+        || TZ=UTC date -d @$((TS1-TS2)) '+-%dDays plus %H:%M:%S'
+}
+
+temptstamp=$(date +%d%b%y_%H%M%S_%Z)
+
+echo -e "\n####################### SUMNER INFO ########################\n${temptstamp}\n"
+
+if [[ -x $(command -v sinfo) ]]; then
+  echo -e "### CPUs ###\n"
+  sinfo -o "%10P %10t %10D %20C"
+  echo -e "\n### Nodes ###\n"
+  sinfo -s
+else
+echo "Command: 'sinfo' is not available on node: $(hostname)"
+fi
+
+if [[ -x $(command -v squeue) ]]; then
+  ## Top Users
+  TOPUSERS=$(squeue -a -l -r -h --noconvert --states=all | awk '{print $2,$5,$4}' | sort | uniq -c | sort -k1,1nr | head -n10 | sort -k3,3r -k1,1nr | awk '{$1=$1};1' OFS="\t")
+
+  MYJOBS=$(squeue -u ${USER} -a -l -r -h --noconvert --states=all | awk '{print $2,$5,$4}' | sort | uniq -c | sort -k1,1nr | head -n10 | sort -k3,3r -k1,1nr | awk '{$1=$1};1' OFS="\t")
+
+  ## print as columns
+  echo -e "\n############## TOP USERS ###############"
+  echo "$TOPUSERS"
+  ## paste <(echo "Top Users"; echo "$TOPUSERS") <(echo "My Jobs"; echo "$MYJOBS") | column -s $'\t' -t
+  echo -e "\n############### MY JOBS ################"
+  echo "$MYJOBS"
+else
+  echo "Command: 'squeue' is not available on node: $(hostname)"
+fi
+
+## this will return non-zero if command is not found on the node, mostly on compute nodes
+if [[ -x $(command -v sinfo) ]]; then
+  SYSRES_START="$(date -d $(sinfo -T -h | awk '{if($1 ~ "^root.*") print $3}') '+%Y-%m-%d %H:%M:%S')"  
+  SYSRES_START="${SYSRES_START:-"NULL"}"
+
+  if [[ "$SYSRES_START" != "NULL" ]]; then
+      TODAY="$(date '+%Y-%m-%d %H:%M:%S')"
+      ## time left until reservation kicks in
+      MAXWT=$(diff_dates "${TODAY}" "${SYSRES_START}")
+      
+      echo -e "\n##### System Reservation Kicks In ######\n"
+      printf "WHEN: %s\tMAX WALLTIME: \033[33;5;7m%s\033[0m\n" "$SYSRES_START" "$MAXWT"
+      echo -e "PS: Jobs will not run if walltime exceeds MAX WALLTIME\n"
+      sinfo -T
+  fi
+else
+    echo -e "\nCan't check system reservation date.\nsinfo command is not available, likely on compute nodes."
+fi
+
+### Disk space ##
+## replace with your common lab space
+TIER1PATH="/projects/fake_space"
+TIER1SPACE=$(/bin/df -h "${TIER1PATH}" | grep projects | tail -n1 | grep -Po "([0-9]{1,3})(?=\%)")
+TIER1SPACE="${TIER1SPACE:-50}"
+
+TIER1USER="/projects/${USER}"
+TIER1USER_SPACE=$(/bin/df -h "${TIER1USER}" | grep projects | tail -n1 | grep -Po "([0-9]{1,3})(?=\%)")
+
+FASTPATH="/fastscratch"
+FASTSPACE=$(/bin/df -h "${FASTPATH}" | grep ctgs0 | tail -n1 | grep -Po "([0-9]{1,3})(?=\%)")
+
+if [[ "${TIER1USER_SPACE}" -gt 98 ]] || [[ "${TIER1SPACE}" -gt 98 ]] || [[ "${FASTSPACE}" -gt 99 ]] || [[ "${TIER2QUOTA}" -gt 99 ]]; then
+  printf "\n######### \033[33;5;7m❗❗ WARN: DISK SPACE USED❗❗ \033[0m ##########\n\ntier1 /projects/%s: %s %%\ntier1 at %s: %s %%\n\n/fastscratch: %s %%\n" "${USER}" "${TIER1USER_SPACE}" "${TIER1PATH}" "${TIER1SPACE}" "${FASTSPACE}"
+else
+  printf "\n############## DISK QUOTA ##############\n\ntier1 /projects/%s: %s %%\ntier1 at %s: %s %%\n\n/fastscratch: %s %%\n" "${USER}" "${TIER1USER_SPACE}" "${TIER1PATH}" "${TIER1SPACE}" "${FASTSPACE}"
+fi
+
+echo -e "\n########################### END ############################\n"
