@@ -29,18 +29,29 @@ fi
 
 if [[ -x $(command -v squeue) ]]; then
   ## Top Users
-  TOPUSERS=$(squeue -a -l -r -h --noconvert --states=all | awk '{print $2,$5,$4}' | sort | uniq -c | sort -k1,1nr | head -n10 | sort -k3,3r -k1,1nr | awk '{$1=$1};1' OFS="\t")
+  TOPUSERS=$(squeue -a -l -r -h --noconvert --states=all | awk '{print $2,$5,$4}' | sort | uniq -c | sort -k1,1nr | head -n10 | sort -k3,3r -k1,1nr | awk '{$1=$1};1' OFS=",")
+  ## Via Brian Geuther
+  TOPCORES=$(squeue -ho "%u,%c" | awk -F ',' '{arr[$1]+=$2} END {for (i in arr) {print i,arr[i]}}' | sort -k2,2nr | awk '{print $2,$1}' OFS="," | head -n10)
+  LONGRUNS=$(squeue -ho "%u,%l" | awk -F"," '{if($2 ~ "^[1,2]{1,2}-.*") print $1}' OFS="\t" | sort | uniq -c | sort -k1,1nr | awk '{print $1,$2}' OFS="," | head -n10)
 
   MYJOBS=$(squeue -u ${USER} -a -l -r -h --noconvert --states=all | awk '{print $2,$5,$4}' | sort | uniq -c | sort -k1,1nr | head -n10 | sort -k3,3r -k1,1nr | awk '{$1=$1};1' OFS="\t")
 
   ## print as columns
   echo -e "\n############## TOP USERS ###############"
-  echo "$TOPUSERS"
-  ## paste <(echo "Top Users"; echo "$TOPUSERS") <(echo "My Jobs"; echo "$MYJOBS") | column -s $'\t' -t
+  paste <(echo "By Queue"; echo "$TOPUSERS") <(echo "By CPUs"; echo "$TOPCORES") <(echo "By walltime of min 24 HR"; echo "$LONGRUNS") | column -s $'\t' -t
   echo -e "\n############### MY JOBS ################"
   echo "$MYJOBS"
 else
   echo "Command: 'squeue' is not available on node: $(hostname)"
+fi
+
+echo -e "\n############## FAIR SHARE ##############\nIf FairShare < 1, know how fair share works before panicking!\nhttps://slurm.schedmd.com/SLUG19/Priority_and_Fair_Trees.pdf\n"
+if [[ -x $(command -v sshare) ]]; then
+    ## PS: Bad idea to run sshare in workflow as it may slow down scheduler
+    ## https://slurm.schedmd.com/sshare.html
+    sshare -u "$USER" -U
+else
+    echo "Command: 'mdiag -f | grep $USER' is not available, likely on compute nodes"
 fi
 
 ## this will return non-zero if command is not found on the node, mostly on compute nodes
@@ -63,6 +74,7 @@ else
 fi
 
 ### Disk space ##
+## ToDo: Prefer pasting from ssh banner message/motd file.
 ## replace with your common lab space
 TIER1PATH="/projects/fake_space"
 TIER1SPACE=$(/bin/df -h "${TIER1PATH}" | grep projects | tail -n1 | grep -Po "([0-9]{1,3})(?=\%)")
