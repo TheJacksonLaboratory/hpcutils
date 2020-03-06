@@ -57,8 +57,8 @@ dir3/subdir/file3.tsv file3.tsv
 
 ```sh
 globus_transfer \
-    -i run3_batchmode_abspath \
-    -s /tier2/verhaak-lab \
+    -i run3_batchmode \
+    -s /tier2/verhaak-lab/tape_archived \
     -t /fastscratch/amins/batchmode \
     -m BATCH \
     -f /home/amins/globus/batch/run3_batchmode.tsv
@@ -76,7 +76,7 @@ globus_transfer \
 ```sh
 globus_transfer \
     -d YES \
-    -i run2_dirmode \
+    -i run4_dirmode_mirror \
     -s /tier2/verhaak-lab/tape_archived/cgp_sra_v20191117 \
     -t /fastscratch/amins/dirmode
 ```
