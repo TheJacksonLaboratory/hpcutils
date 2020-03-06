@@ -1,6 +1,6 @@
 #!/bin/bash
 
-## a few commands to display current state of HPC running moab job scheduler
+## a few commands to display current state of HPC running slurm scheduler
 ## @sbamin
 
 #### required functions ####
