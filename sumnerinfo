@@ -1,17 +1,25 @@
 #!/bin/bash
 
-## a few commands to display current state of HPC running slurm scheduler
+## a few commands to display current state of HPC running Slurm job scheduler
 ## @sbamin
 
 #### required functions ####
 ## calculate difference between two timestamps
+## https://unix.stackexchange.com/a/24636/28675
 ## https://askubuntu.com/a/1158876/52398
 diff_dates(){
     TS1=$(date -d "$1" +%s)
     TS2=$(date -d "$2" +%s)
+    period=$((60*60)) # hours
+
     [ "$TS2" -ge "$TS1" ] \
-        && TZ=UTC date -d @$((TS2-TS1)) '+%dDays plus %H:%M:%S' \
-        || TZ=UTC date -d @$((TS1-TS2)) '+-%dDays plus %H:%M:%S'
+    	&& max_walltime=$(( ("$TS2" - "$TS1")/("$period") )) \
+    	|| max_walltime=$(( ("$TS1" - "$TS2")/("$period") ))
+
+    echo "$max_walltime Hours"
+    # [ $TS2 -ge $TS1 ] \
+    #     && TZ="${TZ:-UTC}" date -d @$((TS2-TS1)) '+%dDays plus %H:%M:%S' \
+    #     || TZ="${TZ:-UTC}" date -d @$((TS1-TS2)) '+-%dDays plus %H:%M:%S'
 }
 
 temptstamp=$(date +%d%b%y_%H%M%S_%Z)
@@ -28,13 +36,14 @@ echo "Command: 'sinfo' is not available on node: $(hostname)"
 fi
 
 if [[ -x $(command -v squeue) ]]; then
+  ## Read https://slurm.schedmd.com/squeue.html
   ## Top Users
   TOPUSERS=$(squeue -a -l -r -h --noconvert --states=all | awk '{print $2,$5,$4}' | sort | uniq -c | sort -k1,1nr | head -n10 | sort -k3,3r -k1,1nr | awk '{$1=$1};1' OFS=",")
   ## Via Brian Geuther
   TOPCORES=$(squeue -ho "%u,%c" | awk -F ',' '{arr[$1]+=$2} END {for (i in arr) {print i,arr[i]}}' | sort -k2,2nr | awk '{print $2,$1}' OFS="," | head -n10)
   LONGRUNS=$(squeue -ho "%u,%l" | awk -F"," '{if($2 ~ "^[1,2]{1,2}-.*") print $1}' OFS="\t" | sort | uniq -c | sort -k1,1nr | awk '{print $1,$2}' OFS="," | head -n10)
 
-  MYJOBS=$(squeue -u ${USER} -a -l -r -h --noconvert --states=all | awk '{print $2,$5,$4}' | sort | uniq -c | sort -k1,1nr | head -n10 | sort -k3,3r -k1,1nr | awk '{$1=$1};1' OFS="\t")
+  MYJOBS=$(squeue -u "${USER}" -a -l -r -h --noconvert --states=all | awk '{print $2,$5,$4}' | sort | uniq -c | sort -k1,1nr | head -n10 | sort -k3,3r -k1,1nr | awk '{$1=$1};1' OFS="\t")
 
   ## print as columns
   echo -e "\n############## TOP USERS ###############"
@@ -56,18 +65,25 @@ fi
 
 ## this will return non-zero if command is not found on the node, mostly on compute nodes
 if [[ -x $(command -v sinfo) ]]; then
-  SYSRES_START="$(date -d $(sinfo -T -h | awk '{if($1 ~ "^root.*") print $3}') '+%Y-%m-%d %H:%M:%S')"  
-  SYSRES_START="${SYSRES_START:-"NULL"}"
+	SYSRES_INFO="$(sinfo -T -h | awk '{if($1 ~ "^root.*") print $3}')"
+	SYSRES_INFO="${SYSRES_INFO:-"NULL"}"
 
-  if [[ "$SYSRES_START" != "NULL" ]]; then
-      TODAY="$(date '+%Y-%m-%d %H:%M:%S')"
-      ## time left until reservation kicks in
-      MAXWT=$(diff_dates "${TODAY}" "${SYSRES_START}")
-      
-      echo -e "\n##### System Reservation Kicks In ######\n"
-      printf "WHEN: %s\tMAX WALLTIME: \033[33;5;7m%s\033[0m\n" "$SYSRES_START" "$MAXWT"
-      echo -e "PS: Jobs will not run if walltime exceeds MAX WALLTIME\n"
-      sinfo -T
+  if [[ "$SYSRES_INFO" != "NULL" ]]; then
+  	SYSRES_START="$(date -d $(sinfo -T -h | awk '{if($1 ~ "^root.*") print $3}') '+%Y-%m-%d %H:%M:%S')"
+	TODAY="$(date '+%Y-%m-%d %H:%M:%S')"
+
+	## Approx. time left until reservation kicks in
+	if [[ -x $(command -v datediff) ]]; then
+		## datediff is from https://github.com/hroptatyr/dateutils/releases
+		MAXWT=$(datediff --from-zone="${TZ:-UTC}" -f  "%d:%H:%M:%S" "${TODAY}" "${SYSRES_START}")
+	else
+		MAXWT=$(diff_dates "${TODAY}" "${SYSRES_START}")
+	fi
+
+	echo -e "\n##### System Reservation Kicks In ######\n"
+	printf "WHEN: %s\tMAX WALLTIME: \033[33;5;7mApprox. %s\033[0m\n" "$SYSRES_START" "$MAXWT"
+	echo -e "PS: Jobs will not run if walltime exceeds MAX WALLTIME\n"
+	sinfo -T
   fi
 else
     echo -e "\nCan't check system reservation date.\nsinfo command is not available, likely on compute nodes."
