@@ -1,0 +1,19 @@
+#!/bin/bash
+
+## attach tmux session if exists else create new
+## @sbamin
+
+## https://unix.stackexchange.com/a/176885/28675
+
+TMUX_TMPDIR="${TMUX_TMPDIR:-${HOME}/logs/tmux}"
+
+if [[ "$(hostname)" == "sumner-log1" ]]; then
+    tmux new-session -A -s S1
+elif [[ "$(hostname)" == "sumner-log2" ]]; then
+    tmux new-session -A -s S2
+else
+    echo -e "WARN: tmux session will not bind to sumner1 or sumner2 but instead to $(hostname)" >&2
+    tmux new-session -A -s sumner
+fi
+
+## END ##
