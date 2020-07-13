@@ -1,0 +1,187 @@
+#!/bin/bash
+
+# Wrapper to run interactive job on HPC Sumner or Winter
+# @sbamin | sumner/winter slurm
+
+# usage
+show_help() {
+cat << EOF
+
+Wrapper to run interactive job using slurm scheduler on HPC Sumner and Winter at JAX.
+
+For options, read sbatch manpage at
+https://slurm.schedmd.com/sbatch.html
+
+Flags are case-sensitive, e.g., -P for partition, -p for email options.
+
+Note: Partition -P is disabled. Default config is for sumner hpc. For winter hpc,
+specify one of winter-compatible QOS using -q flag.
+
+Usage: 	For sumner, ${0##*/} -x YES
+		For winter, ${0##*/} -x YES -q dev
+
+        -h  display this help and exit
+        -j  job name (default: j<random id>_username)
+        -d  work directory (default: current work directory)
+        -P  job partition (default: batch; compute,gpu) - DISABLED for JAX HPC
+        -q  job QOS or queue (default: batch; batch|long for sumner or dev|training|inference for winter)
+        -t  walltime in HH:MM:SS (default: 01:00:00)
+        -m  memory in gb (default: 2G)
+        -n  number of nodes (default: 1)
+        -c  cpu cores per node (default: 1)
+        -g  gpu cores per node (default: 1; specify if -P gpu)
+        -p  email notifications (default: FAIL; NONE, BEGIN, END, FAIL, REQUEUE, ALL)
+        -s  if set to YES, export TMPDIR to /fastscratch/user/tmp (default: NO)
+        -e  extra options to SBATCH (will be appended to default ones: "--requeue --export=all")
+        -b  node to select from (default: any; host1,host2)
+        -x  Submit job (default: NO; YES to submit)
+
+Example CPU job: ${0##*/} -t 01:00:00 -m 4gb -d ~/tmp -q batch -c 2 -x YES
+Example GPU job: ${0##*/} -t 01:00:00 -m 4gb -d ~/tmp -q training -x YES -g 2
+
+  Make sure that you are on winter HPC and have a valid QOS at -q else
+  job will return error without descriptive error.
+
+Quotes are important for variable names containig spaces and special characters.
+
+EOF
+}
+
+if [[ $# == 0 ]];then show_help;exit 1;fi
+
+while getopts "j:d:P:q:t:m:n:c:g:p:e:s:b:x:h" opt; do
+    case "$opt" in
+        h) show_help;exit 0;;
+        j) JOBNAME=$OPTARG;;
+        d) CWD=$OPTARG;;
+		P) PARTITION=$OPTARG;;
+        q) QUEUE=$OPTARG;;
+        t) WALLTIME=$OPTARG;;
+        m) MEMORY=$OPTARG;;
+        n) NODES=$OPTARG;;
+        c) CPU=$OPTARG;;
+        g) GPU=$OPTARG;;
+        p) EMAILOPTS=$OPTARG;;
+        e) EXTRA_OPTS=$OPTARG;;
+		s) SETTMP=$OPTARG;;
+        b) NODEINCL=$OPTARG;;
+		x) SUBMITJOB=$OPTARG;;
+       '?') show_help >&2 exit 1 ;;
+    esac
+done
+
+## timestamp for sbatch file name
+TSTAMP=$(date +%d%b%y_%H%M%S%Z)
+
+## jobname
+if [[ "$(command -v make_jobid)" ]]; then
+  DJOBID=$(printf "%s_%s" "$(whoami)" "$(make_jobid)")
+else
+  DJOBID=$(printf "%s_%s" "$(whoami)" "$TSTAMP")
+fi
+
+TMP_JOBNAME=${JOBNAME:-"$DJOBID"}
+JOBNAME=$(printf "%s" "$TMP_JOBNAME")
+
+## job resources
+## 6/1/2020: partition option is now disabled for sumner and winter hpc.
+PARTITION=${PARTITION:-"compute"}
+QUEUE=${QUEUE:-"batch"}
+WALLTIME=${WALLTIME:-"01:00:00"}
+MEMORY=${MEMORY:-"2G"}
+NODES=${NODES:-"1"}
+CPU=${CPU:-"1"}
+GPU=${GPU:-"1"}
+EMAILOPTS=${EMAILOPTS:-"FAIL"}
+SETTMP=${SETTMP:-"NO"}
+
+## Submit job
+SUBMITJOB=${SUBMITJOB:-"NO"}
+
+if [[ "${SETTMP}" == "YES" ]]; then
+	TMPDIR="/fastscratch/${USER}/tmp"
+	mkdir -p "$TMPDIR"
+	export TMPDIR
+	echo "INFO: TMPDIR is set to ${TMPDIR}"
+fi
+
+## workdir
+CWD=${CWD:-$(pwd)}
+
+## create work dir if it does not exists
+if [[ ! -d "${CWD}" ]]; then
+  mkdir -p "${CWD}" && \
+  echo "Created work dir: ${CWD}"
+fi
+
+## save output sbatch file with jobname and filename identical to command file
+SBATCHOUT="$(printf "%s/%s.sbatch" "$CWD" "$JOBNAME")"
+
+if [[ -f "${SBATCHOUT}" ]]; then
+	echo -e "\nWARN: jobscript: ${SBATCHOUT} found and will be overwritten.\n" >&2
+fi
+
+## stdout and err: Default to terminal
+# STDOUT=$(printf "%s/log_%s.out" "${CWD}" "$JOBNAME")
+# STDERR=$(printf "%s/log_%s.err" "${CWD}" "$JOBNAME")
+
+## default extra options
+## make the jobs re-runnable, pass user env, run interactive with bash login mode
+## Note that bash --login needs to be passed at last of the command string
+PASSOPTS="--export=all --pty"
+
+## request specific node(s)
+NODEINCL=${NODEINCL:-"NONE"}
+
+if [[ "$NODEINCL" != "NONE" ]]; then
+	## update default options to pass
+	PASSOPTS="$(printf "%s --nodelist=%s" "$PASSOPTS" "${NODEINCL}")"
+	echo -e "WARN: NODEINCL is set to $NODEINCL via -b\nAppending request for node(s) in extra options as\n${PASSOPTS}\n" >&2
+fi
+
+## Check HPC
+if [[ "$QUEUE" == "batch" ]] || [[ "$QUEUE" == "long" ]]; then
+
+	if [[ "$(hostname)" != *"sumner"* ]]; then
+	echo -e "ERROR: Invalid hostname $(hostname)\n-q ${QUEUE} is for Sumner hpc but you are not on Sumner HPC\n" >&2
+	exit 1
+	fi
+fi
+
+## Add gpu cores if on winter HPC
+if [[ "$QUEUE" != "batch" ]] && [[ "$QUEUE" != "long" ]]; then
+
+	if [[ "$(hostname)" != *"winter"* ]]; then
+	echo -e "ERROR: Invalid hostname $(hostname)\n-q ${QUEUE} is for winter hpc but you are not on Winter HPC\n" >&2
+	exit 1
+	fi
+
+	echo -e "WARN: Switching to Winter HPC\nMake sure you are using -g <number of gpu cores> or\nit will default to 1 gpu core\nRequesting gpu cores: ${GPU}\n" >&2
+	## update default options to pass
+	PASSOPTS="$(printf "%s --gres gpu:%s" "$PASSOPTS" "${GPU}")"
+fi
+
+## extra options
+EXTRA_OPTS=${EXTRA_OPTS:-"NONE"}
+
+if [[ "$EXTRA_OPTS" != "NONE" ]]; then
+	PASSOPTS_ALL="$(printf "%s %s" "$PASSOPTS" "${EXTRA_OPTS}")"
+	echo -e "INFO: EXTRA_OPTS is set to $EXTRA_OPTS via -e\nPassing this options along with default ones as\n${PASSOPTS_ALL}\n"
+else
+	PASSOPTS_ALL="${PASSOPTS}"
+fi
+
+#### srun job format ####
+## 6/1/2020: note that PARTITION option is now disabled on JAX HPC
+JOBCMD="$(printf "srun --job-name=%s --chdir=%s --qos=%s --time=%s --mem=%s --nodes=%s --ntasks=%s --mail-type=%s %s bash --login" "${JOBNAME}" "${CWD}" "${QUEUE}" "${WALLTIME}" "${MEMORY}" "${NODES}" "${CPU}" "${EMAILOPTS}" "${PASSOPTS_ALL}")"
+
+if [[ "${SUBMITJOB}" == "YES" ]]; then
+  echo -e "\n########################## Submitting Interactive Job ##########################\n\n${JOBCMD}\n"
+  echo -e "\n################################################################################\n"
+  eval "${JOBCMD}"
+else
+  echo -e "\n########################### Interactive Job Command ############################\n"
+  echo -e "\n${JOBCMD}\n\nTo submit: Change/Add -x YES to ${0##*/} ${@}\nMore at ${0##*/} -h\n"
+fi
+
+## END ##
